@@ -1,5 +1,7 @@
 # Lead Events : un pipeline d'événements autour d'un agent n8n
 
+[![CI](https://github.com/samsteeven/lead-events/actions/workflows/ci.yml/badge.svg)](https://github.com/samsteeven/lead-events/actions/workflows/ci.yml)
+
 API **NestJS + Prisma (PostgreSQL)** qui reçoit, par webhook signé, les leads qu'un agent n8n qualifie, publie chaque étape dans **Kafka**, un **consumer** qui calcule les statistiques, et un **tableau de bord Vue 3**.
 
 Le sujet vient d'un système réel : un agent n8n de qualification de leads (formulaire de contact, enrichissement de l'entreprise, score de 1 à 10, e-mail personnalisé). Ici, **tout est testé avec des leads synthétiques** (adresses en `@example.test`), jamais avec de vraies données ; le raccordement à une instance n8n est décrit dans [`docs/n8n-integration.md`](docs/n8n-integration.md) et **n'a pas été testé** contre une instance réelle.
