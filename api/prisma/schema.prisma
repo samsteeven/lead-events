@@ -1,0 +1,83 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum LeadStatus {
+  RECEIVED
+  SCORED
+  EMAILED
+}
+
+/// Un prospect issu du formulaire de contact, tel que l'agent n8n le fait avancer (reçu, scoré, e-mail envoyé).
+model Lead {
+  id          String     @id @default(uuid()) @db.Uuid
+  /// Identifiant du lead côté n8n (ligne de la CRM) : sert à retrouver le même lead d'un événement à l'autre.
+  externalId  String     @unique
+  email       String
+  fullName    String?
+  company     String?
+  message     String?
+  source      String     @default("contact-form")
+  score       Int?
+  scoreReason String?
+  status      LeadStatus @default(RECEIVED)
+  receivedAt  DateTime
+  scoredAt    DateTime?
+  emailSentAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([receivedAt])
+  @@map("leads")
+}
+
+/// Une livraison du webhook n8n. La clé d'idempotence rend les rejeux sans danger (n8n peut réessayer).
+/// `published` passe à vrai une fois l'événement dans Kafka : un rejeu d'une livraison non publiée le republie.
+model WebhookDelivery {
+  idempotencyKey String   @id
+  type           String
+  leadId         String   @db.Uuid
+  published      Boolean  @default(false)
+  receivedAt     DateTime @default(now())
+
+  @@map("webhook_deliveries")
+}
+
+/// Événement déjà compté par le consumer : sa clé primaire l'empêche de compter deux fois un message livré deux fois.
+/// `latencyMs` = délai entre l'arrivée du webhook dans l'API et le traitement par le consumer.
+model ProcessedEvent {
+  eventId    String   @id
+  type       String
+  leadId     String   @db.Uuid
+  webhookAt  DateTime
+  consumedAt DateTime
+  latencyMs  Int
+
+  @@index([consumedAt])
+  @@map("processed_events")
+}
+
+/// Compteurs par jour, tenus à jour par le consumer.
+model DailyStats {
+  day      DateTime @id @db.Date
+  received Int      @default(0)
+  scored   Int      @default(0)
+  emailed  Int      @default(0)
+  scoreSum Int      @default(0)
+
+  @@map("daily_stats")
+}
+
+/// Répartition des scores (1 à 10).
+model ScoreBucket {
+  score Int @id
+  count Int @default(0)
+
+  @@map("score_distribution")
+}
