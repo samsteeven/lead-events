@@ -1,5 +1,5 @@
 import { plainToInstance } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, MinLength, validateSync } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Matches, MinLength, ValidateIf, validateSync } from 'class-validator';
 
 /** Variables d'environnement requises : l'application refuse de démarrer si l'une manque ou est trop faible. */
 export class Env {
@@ -21,6 +21,21 @@ export class Env {
   @IsString()
   @MinLength(16)
   DASHBOARD_TOKEN!: string;
+
+  /**
+   * Jeton d'administration qui autorise l'effacement d'un lead (distinct du jeton de lecture). Optionnel : sans lui,
+   * l'effacement est désactivé. Une valeur vide équivaut à l'absence de valeur.
+   */
+  @ValidateIf((e: Env) => e.ADMIN_TOKEN !== undefined && e.ADMIN_TOKEN !== '')
+  @IsString()
+  @MinLength(16)
+  ADMIN_TOKEN?: string;
+
+  /** Nombre de jours pendant lesquels un lead est conservé (entier positif). Sans valeur, aucune expiration. */
+  @ValidateIf((e: Env) => e.LEAD_RETENTION_DAYS !== undefined && e.LEAD_RETENTION_DAYS !== '')
+  @IsString()
+  @Matches(/^[1-9]\d{0,4}$/, { message: 'doit être un nombre entier de jours supérieur à 0' })
+  LEAD_RETENTION_DAYS?: string;
 
   /** Origines autorisées pour le tableau de bord, séparées par des virgules. */
   @IsOptional()

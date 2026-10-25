@@ -43,7 +43,7 @@ Le sujet vient d'un système réel : un agent n8n de qualification de leads (for
 Prérequis : Docker.
 
 ```bash
-cp .env.example .env            # POSTGRES_PASSWORD, WEBHOOK_SECRET, DASHBOARD_TOKEN (valeurs de 16 caractères minimum)
+cp .env.example .env            # POSTGRES_PASSWORD, WEBHOOK_SECRET, DASHBOARD_TOKEN (16 caractères minimum) ; ADMIN_TOKEN et LEAD_RETENTION_DAYS facultatifs
 docker compose up -d --build    # PostgreSQL, Kafka, migrations, API, consumer, tableau de bord
 node simulator/simulate.mjs --leads 50 --realistic    # simule l'agent n8n (leads synthétiques)
 ```
@@ -67,6 +67,20 @@ node simulator/simulate.mjs --leads 50 --realistic    # simule l'agent n8n (lead
 | `401` | signature absente, fausse, mal formée ou expirée (plus de 5 minutes) |
 | `503` | Kafka indisponible : n8n réessaie |
 
+## Données personnelles : effacement et conservation
+
+Seule la table `leads` contient des données personnelles (e-mail, nom, société, message, motif du score). Les événements Kafka, les livraisons du webhook et les événements traités ne portent que des **identifiants** ; les compteurs sont **agrégés**. Effacer un lead suffit donc à retirer la personne du système.
+
+| Appel | Effet |
+|---|---|
+| `DELETE /leads/<externalId>` | efface un lead par son identifiant n8n : `204`, ou `404` s'il n'existe pas |
+| `POST /leads/erase` avec `{ "email": "…" }` | efface tous les leads de cette adresse (casse ignorée) : `{ "erased": n }` ; l'adresse est dans le corps, pas dans l'URL |
+
+- Ces appels exigent `Authorization: Bearer <ADMIN_TOKEN>`, un jeton **distinct** du jeton de lecture du tableau de bord. Sans `ADMIN_TOKEN` dans l'environnement, l'effacement est **désactivé** (`403`) : il n'y a pas de clé par défaut.
+- `LEAD_RETENTION_DAYS=90` supprime les leads reçus il y a plus de 90 jours, au démarrage de l'API puis toutes les heures. Sans valeur, rien n'expire.
+- Ce qui reste après un effacement : les **compteurs agrégés** (nombre de leads reçus, répartition des scores) et les identifiants techniques (`processed_events`, `webhook_deliveries`), nécessaires à l'idempotence et qui ne désignent plus personne une fois le lead supprimé. Un rejeu par n8n d'un appel déjà livré ne recrée pas le lead effacé ; un **nouvel** événement pour la même personne en créerait un nouveau.
+- Les messages Kafka ne contiennent ni e-mail ni nom (seulement l'identifiant n8n du lead), mais ils restent dans le topic jusqu'à la fin de sa rétention.
+
 ## Décisions de conception
 
 - **Signature HMAC avec horodatage** (comme Stripe ou GitHub) plutôt qu'un simple jeton : elle prouve que le corps n'a pas été modifié et empêche de rejouer un appel capturé. Comparaison en temps constant ; la réponse ne dit pas ce qui a échoué.
@@ -82,12 +96,12 @@ node simulator/simulate.mjs --leads 50 --realistic    # simule l'agent n8n (lead
 ## Tests
 
 ```bash
-cd api && npm test                     # 51 tests unitaires
+cd api && npm test                     # 70 tests unitaires
 docker compose up -d postgres kafka    # puis, avec api/.env renseigné :
-cd api && npm run test:e2e             # 19 tests d'intégration sur PostgreSQL et Kafka réels
+cd api && npm run test:e2e             # 24 tests d'intégration sur PostgreSQL et Kafka réels
 cd dashboard && npm test               # 24 tests (Vitest)
 ```
-Les tests d'intégration utilisent un topic et un groupe de consumer propres à chaque exécution : aucun message d'une exécution précédente ne peut fausser les compteurs. Ils couvrent la sécurité du webhook (signature fausse, expirée, absente), le parcours d'un lead, le rejeu, l'arrivée dans le désordre, les doublons dans un lot, la file morte et les droits de lecture.
+Les tests d'intégration utilisent un topic et un groupe de consumer propres à chaque exécution : aucun message d'une exécution précédente ne peut fausser les compteurs. Ils couvrent la sécurité du webhook (signature fausse, expirée, absente), le parcours d'un lead, le rejeu, l'arrivée dans le désordre, les doublons dans un lot, la file morte, les droits de lecture, l'effacement d'un lead (par identifiant et par e-mail) et la conservation.
 
 ## Mesures
 
@@ -127,7 +141,7 @@ Dans toutes les passes : 6 000 / 6 000 événements comptés exactement une fois
 
 - **Raccordement n8n non testé** sur une instance réelle ; seul le simulateur l'exerce.
 - **Pas d'outbox transactionnel** : un plantage de l'API entre l'écriture en base et la publication n'est rattrapé que si n8n réessaie.
-- **Pas de gestion des données personnelles** : ni effacement d'un lead, ni durée de conservation. À définir avant de brancher de vrais leads.
+- **Données personnelles** : l'effacement et la conservation existent (voir la section dédiée) mais ne sont ni intégrés à une procédure de demande, ni journalisés pour preuve (le journal ne garde que le nombre de leads supprimés). La conformité complète d'un traitement réel (registre, information des personnes, base légale) reste à la charge de l'exploitant.
 - **Un seul broker Kafka** et un seul PostgreSQL : pas de haute disponibilité ni de réplication ; les topics ont un facteur de réplication de 1.
 - Les mesures de latence comparent deux horloges du même hôte (API et consumer) : elles ne seraient pas valables entre deux machines non synchronisées. Elles viennent d'une seule machine, avec 3 passes par ligne, et ne valent pas comme capacité de production.
 - **Le consumer est resté limité à une instance** : la montée en charge horizontale (plusieurs consumers dans le groupe, jusqu'à 3 pour 3 partitions) est prévue par la conception (compteurs atomiques, `ON CONFLICT`), mais n'a pas été mesurée.

@@ -66,6 +66,8 @@ services:
       KAFKA_BROKERS: kafka:9092
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:?définir WEBHOOK_SECRET dans .env}
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?définir DASHBOARD_TOKEN dans .env}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      LEAD_RETENTION_DAYS: ${LEAD_RETENTION_DAYS:-}
     depends_on:
       migrate: { condition: service_completed_successfully }
       kafka: { condition: service_healthy }

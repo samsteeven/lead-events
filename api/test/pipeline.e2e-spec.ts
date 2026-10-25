@@ -14,11 +14,15 @@ import { AppModule } from '../src/app.module';
 import { StatsAggregator } from '../src/consumer/stats-aggregator.service';
 import { ConsumerModule } from '../src/consumer/consumer.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { PrivacyService } from '../src/privacy/privacy.service';
 import { signatureHeader } from '../src/webhook/signature';
 
 const RUN = randomUUID().slice(0, 8);
 process.env.KAFKA_TOPIC = `lead.events.test.${RUN}`;
 process.env.KAFKA_CONSUMER_GROUP = `lead-stats-test-${RUN}`;
+// Jeton d'administration propre à l'exécution : l'effacement est désactivé sans lui.
+const ADMIN_TOKEN = `admin-${randomUUID()}`;
+process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 
 type EventType = 'lead.received' | 'lead.scored' | 'email.sent';
 
@@ -239,6 +243,80 @@ describe('pipeline webhook -> Kafka -> consumer -> statistiques', () => {
 
     it('expose la santé sans jeton', async () => {
       await request(app.getHttpServer()).get('/health').expect(200).expect({ status: 'ok' });
+    });
+  });
+
+  describe('données personnelles', () => {
+    const erase = (externalId: string, bearer: string = ADMIN_TOKEN) =>
+      request(app.getHttpServer()).delete(`/leads/${encodeURIComponent(externalId)}`).set('authorization', `Bearer ${bearer}`);
+    const leads = () => request(app.getHttpServer()).get('/leads?limit=200').set('authorization', `Bearer ${token}`);
+
+    it("réserve l'effacement au jeton d'administration (le jeton de lecture ne suffit pas)", async () => {
+      await request(app.getHttpServer()).delete('/leads/inconnu').expect(401);
+      await erase('inconnu', token).expect(401);
+      await request(app.getHttpServer()).post('/leads/erase').send({ email: 'x@example.test' }).expect(401);
+    });
+
+    it('répond 404 pour un lead inconnu', async () => {
+      await erase(`${RUN}-inconnu`).expect(404);
+    });
+
+    it('efface le lead, garde les statistiques agrégées et ne le recrée pas au rejeu du webhook', async () => {
+      const lead = 'efface-1';
+      const received = body('lead.received', lead);
+      await send(received).expect(202);
+      await send(body('lead.scored', lead, { score: 6, scoreReason: 'motif privé' })).expect(202);
+      const eventsOf = () => prisma.processedEvent.count({ where: { eventId: { startsWith: `${RUN}-${lead}:` } } });
+      await waitFor(async () => (await eventsOf()) === 2, 'événements du lead traités');
+      const leadId = (await prisma.lead.findUniqueOrThrow({ where: { externalId: `${RUN}-${lead}` } })).id;
+
+      const before = (await summary().expect(200)).body;
+      await erase(`${RUN}-${lead}`).expect(204);
+
+      expect(await prisma.lead.findUnique({ where: { externalId: `${RUN}-${lead}` } })).toBeNull();
+      const { body: list } = await leads().expect(200);
+      expect(list.some((l: { id: string }) => l.id === leadId)).toBe(false);
+
+      const after = (await summary().expect(200)).body;
+      expect(after.received).toBe(before.received);
+      expect(after.scored).toBe(before.scored);
+
+      // n8n réessaie le même appel : la livraison est connue, le lead effacé n'est pas recréé.
+      const replay = await send(received).expect(202);
+      expect(replay.body.duplicate).toBe(true);
+      expect(await prisma.lead.findUnique({ where: { externalId: `${RUN}-${lead}` } })).toBeNull();
+      await erase(`${RUN}-${lead}`).expect(404);
+    });
+
+    it("efface par adresse e-mail, sans tenir compte de la casse, et refuse une adresse invalide", async () => {
+      const lead = 'efface-2';
+      await send(body('lead.received', lead)).expect(202);
+      await request(app.getHttpServer())
+        .post('/leads/erase')
+        .set('authorization', `Bearer ${ADMIN_TOKEN}`)
+        .send({ email: 'pas-une-adresse' })
+        .expect(400);
+
+      const upper = `${lead}@EXAMPLE.test`;
+      const first = await request(app.getHttpServer()).post('/leads/erase').set('authorization', `Bearer ${ADMIN_TOKEN}`).send({ email: upper }).expect(200);
+      expect(first.body).toEqual({ erased: 1 });
+      const second = await request(app.getHttpServer()).post('/leads/erase').set('authorization', `Bearer ${ADMIN_TOKEN}`).send({ email: upper }).expect(200);
+      expect(second.body).toEqual({ erased: 0 });
+    });
+
+    it('supprime les leads plus anciens que la durée de conservation et garde les autres', async () => {
+      const day = 24 * 60 * 60 * 1000;
+      const mk = (name: string, ageDays: number) =>
+        prisma.lead.create({
+          data: { externalId: `${RUN}-${name}`, email: `${name}@example.test`, receivedAt: new Date(Date.now() - ageDays * day) },
+        });
+      await mk('ancien', 200);
+      await mk('recent', 2);
+
+      expect(await app.get(PrivacyService).purgeOlderThan(90)).toBe(1);
+
+      expect(await prisma.lead.findUnique({ where: { externalId: `${RUN}-ancien` } })).toBeNull();
+      expect(await prisma.lead.findUnique({ where: { externalId: `${RUN}-recent` } })).not.toBeNull();
     });
   });
 });

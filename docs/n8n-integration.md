@@ -82,4 +82,4 @@ Réponses : `202` accepté (`duplicate: true` pour un rejeu déjà publié), `40
 L'instance n8n doit pouvoir joindre l'API. Mettre l'API derrière un proxy HTTPS (Caddy, nginx) ; le webhook est protégé par la signature, les routes `/stats` et `/leads` par le jeton `DASHBOARD_TOKEN`. **Ne jamais publier le secret ni le jeton dans le workflow exporté ou dans git.**
 
 ## Données personnelles
-Les leads sont des données personnelles (nom, e-mail, société, message). L'API les conserve dans PostgreSQL ; le tableau de bord masque les adresses (`c***@exemple.fr`). Il n'y a **pas encore** d'endpoint d'effacement ni de durée de conservation : à définir avant de brancher de vrais leads.
+Les leads sont des données personnelles (nom, e-mail, société, message). L'API les conserve dans PostgreSQL ; le tableau de bord masque les adresses (`c***@exemple.fr`). L'effacement d'un lead (`DELETE /leads/<externalId>` ou `POST /leads/erase`, avec `ADMIN_TOKEN`) et une durée de conservation (`LEAD_RETENTION_DAYS`) existent : voir le README. **Les activer et définir la durée avant de brancher de vrais leads.**

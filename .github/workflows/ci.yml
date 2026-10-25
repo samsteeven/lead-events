@@ -22,7 +22,32 @@ jobs:
       - run: npx prisma generate
       - run: npm run build
       - run: npm test
-      # Les tests d'intégration (test:e2e) exigent PostgreSQL et Kafka : voir le README (docker compose up -d postgres kafka).
+
+  integration:
+    # Tests d'intégration sur un vrai PostgreSQL et un vrai Kafka (ceux du docker-compose.yml).
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-only-password
+      WEBHOOK_SECRET: ci-only-webhook-secret
+      DASHBOARD_TOKEN: ci-only-dashboard-token
+      DATABASE_URL: postgresql://leadevents:ci-only-password@localhost:5442/leadevents?schema=public
+      KAFKA_BROKERS: localhost:9094
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: docker compose up -d --wait postgres kafka
+      - working-directory: api
+        run: |
+          npm ci
+          npx prisma generate
+          npx prisma migrate deploy
+          npm run test:e2e
+      - if: failure()
+        run: docker compose logs --tail 80 postgres kafka
 
   dashboard:
     runs-on: ubuntu-latest
